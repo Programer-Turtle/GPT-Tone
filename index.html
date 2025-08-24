@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Multi-Tone Generator (Web Audio)</title>
+<style>
+  :root {
+    --bg: #0f1221;
+    --panel: #171a2e;
+    --accent: #7aa2ff;
+    --text: #e9ecff;
+    --muted: #a8b0d9;
+    --danger: #ff6b6b;
+    --ok: #59d090;
+    --border: #2a2f52;
+    --shadow: 0 10px 30px rgba(0,0,0,0.35);
+    --radius: 14px;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 80% -20%, #1a1f3a 0, #0f1221 60%) no-repeat,
+                radial-gradient(800px 400px at 10% 120%, #1b2040 0, #0f1221 60%) no-repeat,
+                var(--bg);
+    color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+    padding: 24px;
+  }
+  h1 { font-size: 24px; margin: 0 0 8px; }
+  .subtitle { color: var(--muted); margin-bottom: 18px; }
+  .app {
+    max-width: 1100px; margin: 0 auto; display: grid; gap: 18px;
+    grid-template-columns: 1.1fr 0.9fr;
+  }
+  .card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
+    border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 16px;
+  }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .tone-list { display: grid; gap: 10px; }
+  .tone {
+    display: grid; grid-template-columns: 110px 160px 1fr 40px;
+    gap: 10px; align-items: center; padding: 10px;
+    border: 1px solid var(--border); border-radius: 10px; background: #121633;
+  }
+  .tone input[type="number"]{ width: 100%; }
+  .tone select, .tone input, .tone button {
+    background: #0e1330; color: var(--text); border: 1px solid var(--border);
+    border-radius: 9px; padding: 8px 10px; font-size: 14px;
+  }
+  .tone .vol { display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; }
+  .tone .vol output { text-align: right; color: var(--muted); }
+  .tone .del {
+    border: 1px solid #3a2b33; background: #251620; color: #ff9aa8;
+    width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; cursor: pointer;
+  }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn {
+    background: #1a275d; border: 1px solid #203078; color: #cfe0ff; padding: 10px 14px;
+    border-radius: 12px; cursor: pointer; font-weight: 600;
+  }
+  .btn.primary { background: linear-gradient(180deg, #3a64ff, #294ddd); border-color: #3a64ff; color: white; }
+  .btn.stop { background: linear-gradient(180deg, #ff6b6b, #e45555); border-color: #ff6b6b; color: white; }
+  .btn.ghost { background: #0f1536; border-color: var(--border); color: var(--muted); }
+  label { color: var(--muted); }
+  .slider { accent-color: var(--accent); }
+  .grid-2 { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  canvas {
+    width: 100%; height: 200px; background: #0a0e24; border: 1px solid var(--border); border-radius: 12px;
+  }
+  .mini canvas { height: 120px; }
+  .pill { padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); }
+  .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#0e1330; padding:2px 6px; border-radius:6px; border:1px solid var(--border); }
+  footer { text-align:center; color: var(--muted); margin-top: 8px; }
+  a { color: #9dc2ff; text-decoration: none; }
+</style>
+</head>
+<body>
+  <h1>🎛️ Multi-Tone Generator</h1>
+  <div class="subtitle">Add multiple oscillators, choose wave types, and visualize the signal in real time.</div>
+
+  <div class="app">
+    <!-- Left: Builder & Visualizer -->
+    <section class="card">
+      <div class="controls">
+        <button class="btn primary" id="playBtn">▶ Play</button>
+        <button class="btn stop" id="stopBtn" disabled>⏹ Stop</button>
+        <span class="pill">Master Volume</span>
+        <input class="slider" id="masterGain" type="range" min="0" max="1" step="0.001" value="0.4" />
+        <output id="masterGainOut">0.40</output>
+        <span class="pill">Sample Rate: <span id="sr">—</span></span>
+      </div>
+
+      <div class="controls">
+        <button class="btn" id="addTone">＋ Add Tone</button>
+        <button class="btn ghost" id="addPreset">Quick Demo (4 voices)</button>
+      </div>
+
+      <div class="tone-list" id="toneList"></div>
+
+      <div style="margin-top:14px">
+        <label class="pill">Oscilloscope (time domain)</label>
+        <canvas id="scope" width="900" height="220" aria-label="Oscilloscope"></canvas>
+      </div>
+
+      <div style="margin-top:10px">
+        <label class="pill">Spectrum (frequency domain)</label>
+        <canvas id="spectrum" width="900" height="220" aria-label="Spectrum Analyzer"></canvas>
+      </div>
+    </section>
+
+    <!-- Right: Waveform reference -->
+    <aside class="card">
+      <h3 style="margin:6px 0 10px">Waveform Reference</h3>
+      <div class="grid-2 mini">
+        <div>
+          <div class="pill">Sine</div>
+          <canvas id="refSine" width="400" height="120"></canvas>
+        </div>
+        <div>
+          <div class="pill">Square</div>
+          <canvas id="refSquare" width="400" height="120"></canvas>
+        </div>
+        <div>
+          <div class="pill">Triangle</div>
+          <canvas id="refTriangle" width="400" height="120"></canvas>
+        </div>
+        <div>
+          <div class="pill">Sawtooth</div>
+          <canvas id="refSaw" width="400" height="120"></canvas>
+        </div>
+      </div>
+      <p style="color:var(--muted); margin-top:10px">
+        Tips:
+        <br>• Click <span class="kbd">＋ Add Tone</span> to stack oscillators (e.g., make chords or supersaws).
+        <br>• Adjust values while playing; everything updates live.
+        <br>• For stable playback, interact (click) once to unlock audio on some browsers.
+      </p>
+      <footer>Built with the Web Audio API.</footer>
+    </aside>
+  </div>
+
+<script>
+(() => {
+  // --- Audio graph state ---
+  let audioCtx = null;
+  let analyser = null;
+  let analyserFreq = null;
+  let masterGain = null;
+  let isPlaying = false;
+
+  const tones = []; // {id, osc, gainNode, ui:{...}}
+
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+  const el = {
+    play: $('#playBtn'),
+    stop: $('#stopBtn'),
+    add: $('#addTone'),
+    preset: $('#addPreset'),
+    list: $('#toneList'),
+    scope: $('#scope'),
+    spectrum: $('#spectrum'),
+    masterGain: $('#masterGain'),
+    masterGainOut: $('#masterGainOut'),
+    sr: $('#sr'),
+    refs: {
+      sine: $('#refSine'),
+      square: $('#refSquare'),
+      triangle: $('#refTriangle'),
+      saw: $('#refSaw'),
+    }
+  };
+
+  // --- Setup / Teardown ---
+  function ensureAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = parseFloat(el.masterGain.value);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.85;
+    analyserFreq = audioCtx.createAnalyser();
+    analyserFreq.fftSize = 4096;
+
+    masterGain.connect(analyser);
+    masterGain.connect(analyserFreq);
+    masterGain.connect(audioCtx.destination);
+
+    el.sr.textContent = `${audioCtx.sampleRate.toLocaleString()} Hz`;
+  }
+
+  function start() {
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    // create oscillators for any rows that don't have them yet
+    tones.forEach(t => buildOrUpdateToneNode(t));
+    isPlaying = true;
+    el.play.disabled = true;
+    el.stop.disabled = false;
+    loopScope();
+    loopSpectrum();
+  }
+
+  function stop() {
+    tones.forEach(t => {
+      if (t.osc) try { t.osc.stop(); } catch {}
+      if (t.osc) t.osc.disconnect();
+      if (t.gainNode) t.gainNode.disconnect();
+      t.osc = null;
+      t.gainNode = null;
+    });
+    isPlaying = false;
+    el.play.disabled = false;
+    el.stop.disabled = true;
+  }
+
+  // --- Tone Row UI + Nodes ---
+  function addToneRow({ freq=440, type='sine', vol=0.3 } = {}) {
+    const id = crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2);
+    const div = document.createElement('div');
+    div.className = 'tone';
+    div.dataset.id = id;
+    div.innerHTML = `
+      <input type="number" class="freq" min="10" max="20000" step="0.1" value="${freq}" aria-label="Frequency (Hz)" />
+      <select class="type" aria-label="Waveform">
+        ${['sine','square','triangle','sawtooth'].map(w => `<option value="${w}" ${w===type?'selected':''}>${w}</option>`).join('')}
+      </select>
+      <div class="vol">
+        <input class="slider gain" type="range" min="0" max="1" step="0.001" value="${vol}" aria-label="Volume" />
+        <output class="gainOut">${vol.toFixed(2)}</output>
+      </div>
+      <button class="del" title="Remove tone">✕</button>
+    `;
+    el.list.appendChild(div);
+
+    const tone = { id, osc:null, gainNode:null, ui:{
+      root: div,
+      freq: div.querySelector('.freq'),
+      type: div.querySelector('.type'),
+      gain: div.querySelector('.gain'),
+      gainOut: div.querySelector('.gainOut'),
+      del: div.querySelector('.del'),
+    }};
+    tones.push(tone);
+
+    // UI bindings
+    tone.ui.gain.addEventListener('input', () => {
+      tone.ui.gainOut.textContent = parseFloat(tone.ui.gain.value).toFixed(2);
+      if (tone.gainNode) tone.gainNode.gain.setTargetAtTime(parseFloat(tone.ui.gain.value), audioCtx?.currentTime ?? 0, 0.01);
+    });
+    tone.ui.freq.addEventListener('input', () => {
+      const hz = clamp(parseFloat(tone.ui.freq.value)||440, 10, 20000);
+      tone.ui.freq.value = hz;
+      if (tone.osc) tone.osc.frequency.setTargetAtTime(hz, audioCtx.currentTime, 0.005);
+    });
+    tone.ui.type.addEventListener('change', () => {
+      if (tone.osc) tone.osc.type = tone.ui.type.value;
+    });
+    tone.ui.del.addEventListener('click', () => {
+      // stop and remove
+      if (tone.osc) { try { tone.osc.stop(); } catch {} }
+      if (tone.gainNode) tone.gainNode.disconnect();
+      if (tone.osc) tone.osc.disconnect();
+      div.remove();
+      const idx = tones.findIndex(t => t.id === tone.id);
+      if (idx >= 0) tones.splice(idx,1);
+    });
+
+    // If already playing, build nodes for this tone now
+    if (isPlaying) buildOrUpdateToneNode(tone);
+  }
+
+  function buildOrUpdateToneNode(tone) {
+    if (!audioCtx) return;
+    // tear down existing
+    if (tone.osc) { try { tone.osc.stop(); } catch {} tone.osc.disconnect(); }
+    if (tone.gainNode) tone.gainNode.disconnect();
+
+    // create new
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = tone.ui.type.value;
+    const hz = clamp(parseFloat(tone.ui.freq.value)||440, 10, 20000);
+    tone.ui.freq.value = hz;
+    osc.frequency.value = hz;
+    g.gain.value = parseFloat(tone.ui.gain.value);
+
+    osc.connect(g).connect(masterGain);
+    osc.start();
+
+    tone.osc = osc;
+    tone.gainNode = g;
+  }
+
+  function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
+
+  // --- Visualizers ---
+  const scopeCtx = el.scope.getContext('2d');
+  const specCtx = el.spectrum.getContext('2d');
+  const scopeBuf = new Uint8Array(2048);
+  const freqBuf = new Uint8Array(2048);
+
+  function loopScope() {
+    if (!isPlaying || !analyser) return;
+    analyser.getByteTimeDomainData(scopeBuf);
+    drawOscilloscope(scopeCtx, el.scope, scopeBuf);
+    requestAnimationFrame(loopScope);
+  }
+
+  function loopSpectrum() {
+    if (!isPlaying || !analyserFreq) return;
+    analyserFreq.getByteFrequencyData(freqBuf);
+    drawSpectrum(specCtx, el.spectrum, freqBuf, audioCtx.sampleRate, analyserFreq.fftSize);
+    requestAnimationFrame(loopSpectrum);
+  }
+
+  function drawOscilloscope(ctx, canvas, data) {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#0a0e24';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#7aa2ff';
+    ctx.beginPath();
+    const slice = canvas.width / data.length;
+    for (let i=0; i<data.length; i++){
+      const v = data[i] / 128.0 - 1.0; // [-1,1]
+      const x = i * slice;
+      const y = canvas.height/2 + v * canvas.height/2 * 0.9;
+      (i===0) ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // midline
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height/2);
+    ctx.lineTo(canvas.width, canvas.height/2);
+    ctx.stroke();
+  }
+
+  function drawSpectrum(ctx, canvas, data, sampleRate, fftSize) {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#0a0e24';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    const barWidth = canvas.width / data.length;
+    ctx.fillStyle = '#59d090';
+    for (let i=0; i<data.length; i++){
+      const v = data[i] / 255;
+      const h = v * (canvas.height - 10);
+      const x = i * barWidth;
+      const y = canvas.height - h;
+      ctx.fillRect(x, y, barWidth+0.5, h);
+    }
+    // frequency scale (rough)
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textBaseline = 'top';
+    const marks = [100, 200, 400, 800, 1000, 2000, 4000, 8000];
+    marks.forEach(f => {
+      const nyquist = sampleRate / 2;
+      const index = Math.round(f / nyquist * data.length);
+      const x = index * barWidth;
+      ctx.fillRect(x, 0, 1, canvas.height);
+      ctx.fillText(`${f} Hz`, x + 4, 4);
+    });
+  }
+
+  // --- Master controls ---
+  el.masterGain.addEventListener('input', () => {
+    const v = parseFloat(el.masterGain.value);
+    el.masterGainOut.textContent = v.toFixed(2);
+    if (masterGain) masterGain.gain.setTargetAtTime(v, audioCtx.currentTime, 0.01);
+  });
+
+  el.play.addEventListener('click', start);
+  el.stop.addEventListener('click', stop);
+
+  el.add.addEventListener('click', () => {
+    addToneRow({});
+  });
+
+  el.preset.addEventListener('click', () => {
+    // Clear any existing rows
+    $$('#toneList .tone .del').forEach(btn => btn.click());
+    // Add a musical-ish demo stack
+    addToneRow({ freq: 440, type: 'sine', vol: 0.28 });     // A4 fundamental
+    addToneRow({ freq: 880, type: 'triangle', vol: 0.14 }); // octave
+    addToneRow({ freq: 660, type: 'square', vol: 0.10 });   // fifth
+    addToneRow({ freq: 550, type: 'sawtooth', vol: 0.08 }); // fourth
+  });
+
+  // --- Draw reference waveforms (idealized shapes) ---
+  function drawRef(canvas, fn) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#0a0e24'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    const w = canvas.width, h = canvas.height, cx = 0, cy = h/2, A = h*0.38;
+    ctx.lineWidth = 2; ctx.strokeStyle = '#cfe0ff'; ctx.beginPath();
+    for (let x = 0; x < w; x++){
+      const t = (x/w) * 2*Math.PI; // one cycle
+      const y = cy - A * fn(t);
+      (x===0) ? ctx.moveTo(cx+x, y) : ctx.lineTo(cx+x, y);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+  }
+  const TWO_PI = Math.PI * 2;
+  drawRef(el.refs.sine, t => Math.sin(t));
+  drawRef(el.refs.square, t => Math.sign(Math.sin(t)) || 1);
+  drawRef(el.refs.triangle, t => {
+    // Triangle via saw folded: normalized to [-1,1]
+    let s = (t / Math.PI) % 2; // [0,2)
+    s = s < 1 ? s : 2 - s;     // [0,1] rising then falling
+    return (s * 2 - 1);        // [-1,1]
+  });
+  drawRef(el.refs.saw, t => ((t / Math.PI) % 2) - 1);
+
+  // --- Initial rows for convenience ---
+  addToneRow({ freq: 440, type: 'sine', vol: 0.30 });
+  addToneRow({ freq: 660, type: 'sine', vol: 0.18 });
+
+})();
+</script>
+</body>
+</html>
