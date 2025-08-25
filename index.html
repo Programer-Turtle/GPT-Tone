@@ -219,6 +219,16 @@
     el.stop.disabled = true;
   }
 
+  // --- Helpers ---
+  function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
+  function parseHz(val) {
+    const n = parseFloat(val);
+    return Number.isFinite(n) ? n : null;
+  }
+  // We’ll only enforce limits on blur or when (re)building nodes, not on every keystroke.
+  const HZ_MIN = 0.01;   // allow sub-Hz typing/playback
+  const HZ_MAX = 20000;
+
   // --- Tone Row UI + Nodes ---
   function addToneRow({ freq=440, type='sine', vol=0.3 } = {}) {
     const id = crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2);
@@ -226,7 +236,7 @@
     div.className = 'tone';
     div.dataset.id = id;
     div.innerHTML = `
-      <input type="number" class="freq" min="00" max="20000" step="0.1" value="${freq}" aria-label="Frequency (Hz)" />
+      <input type="number" class="freq" max="${HZ_MAX}" step="0.01" value="${freq}" aria-label="Frequency (Hz)" />
       <select class="type" aria-label="Waveform">
         ${['sine','square','triangle','sawtooth'].map(w => `<option value="${w}" ${w===type?'selected':''}>${w}</option>`).join('')}
       </select>
@@ -248,21 +258,34 @@
     }};
     tones.push(tone);
 
-    // UI bindings
+    // UI bindings (smooth typing)
     tone.ui.gain.addEventListener('input', () => {
       tone.ui.gainOut.textContent = parseFloat(tone.ui.gain.value).toFixed(2);
-      if (tone.gainNode) tone.gainNode.gain.setTargetAtTime(parseFloat(tone.ui.gain.value), audioCtx?.currentTime ?? 0, 0.01);
+      if (tone.gainNode && audioCtx) tone.gainNode.gain.setTargetAtTime(parseFloat(tone.ui.gain.value), audioCtx.currentTime, 0.01);
     });
+
+    // While typing: update oscillator only if value is valid & > 0 (no clamping yet).
     tone.ui.freq.addEventListener('input', () => {
-      const hz = clamp(parseFloat(tone.ui.freq.value)||440, 10, 20000);
-      tone.ui.freq.value = hz;
-      if (tone.osc) tone.osc.frequency.setTargetAtTime(hz, audioCtx.currentTime, 0.005);
+      const hz = parseHz(tone.ui.freq.value);
+      if (hz && hz > 0 && tone.osc && audioCtx) {
+        tone.osc.frequency.setTargetAtTime(hz, audioCtx.currentTime, 0.005);
+      }
     });
+
+    // On leaving the field: normalize the value to safe range
+    tone.ui.freq.addEventListener('blur', () => {
+      let hz = parseHz(tone.ui.freq.value);
+      if (hz == null || hz <= 0) hz = 440;
+      hz = clamp(hz, HZ_MIN, HZ_MAX);
+      tone.ui.freq.value = hz;
+      if (tone.osc && audioCtx) tone.osc.frequency.setTargetAtTime(hz, audioCtx.currentTime, 0.005);
+    });
+
     tone.ui.type.addEventListener('change', () => {
       if (tone.osc) tone.osc.type = tone.ui.type.value;
     });
+
     tone.ui.del.addEventListener('click', () => {
-      // stop and remove
       if (tone.osc) { try { tone.osc.stop(); } catch {} }
       if (tone.gainNode) tone.gainNode.disconnect();
       if (tone.osc) tone.osc.disconnect();
@@ -277,17 +300,22 @@
 
   function buildOrUpdateToneNode(tone) {
     if (!audioCtx) return;
-    // tear down existing
     if (tone.osc) { try { tone.osc.stop(); } catch {} tone.osc.disconnect(); }
     if (tone.gainNode) tone.gainNode.disconnect();
 
-    // create new
+    // Create new nodes
     const osc = audioCtx.createOscillator();
     const g = audioCtx.createGain();
+
     osc.type = tone.ui.type.value;
-    const hz = clamp(parseFloat(tone.ui.freq.value)||440, 10, 20000);
+
+    // Clamp once when instantiating node (so empty/invalid input won't crash)
+    let hz = parseHz(tone.ui.freq.value);
+    if (hz == null || hz <= 0) hz = 440;
+    hz = clamp(hz, HZ_MIN, HZ_MAX);
     tone.ui.freq.value = hz;
     osc.frequency.value = hz;
+
     g.gain.value = parseFloat(tone.ui.gain.value);
 
     osc.connect(g).connect(masterGain);
@@ -296,8 +324,6 @@
     tone.osc = osc;
     tone.gainNode = g;
   }
-
-  function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
 
   // --- Visualizers ---
   const scopeCtx = el.scope.getContext('2d');
@@ -335,7 +361,6 @@
       (i===0) ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
     }
     ctx.stroke();
-    // midline
     ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     ctx.beginPath();
     ctx.moveTo(0, canvas.height/2);
@@ -357,7 +382,6 @@
       const y = canvas.height - h;
       ctx.fillRect(x, y, barWidth+0.5, h);
     }
-    // frequency scale (rough)
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = '11px system-ui, sans-serif';
     ctx.textBaseline = 'top';
@@ -375,15 +399,13 @@
   el.masterGain.addEventListener('input', () => {
     const v = parseFloat(el.masterGain.value);
     el.masterGainOut.textContent = v.toFixed(2);
-    if (masterGain) masterGain.gain.setTargetAtTime(v, audioCtx.currentTime, 0.01);
+    if (masterGain && audioCtx) masterGain.gain.setTargetAtTime(v, audioCtx.currentTime, 0.01);
   });
 
   el.play.addEventListener('click', start);
   el.stop.addEventListener('click', stop);
 
-  el.add.addEventListener('click', () => {
-    addToneRow({});
-  });
+  el.add.addEventListener('click', () => addToneRow({}));
 
   el.preset.addEventListener('click', () => {
     // Clear any existing rows
@@ -395,34 +417,30 @@
     addToneRow({ freq: 550, type: 'sawtooth', vol: 0.08 }); // fourth
   });
 
-  // --- Draw reference waveforms (idealized shapes) ---
+  // --- Draw reference waveforms (idealized) ---
   function drawRef(canvas, fn) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.fillStyle = '#0a0e24'; ctx.fillRect(0,0,canvas.width,canvas.height);
-    const w = canvas.width, h = canvas.height, cx = 0, cy = h/2, A = h*0.38;
+    const w = canvas.width, h = canvas.height, cy = h/2, A = h*0.38;
     ctx.lineWidth = 2; ctx.strokeStyle = '#cfe0ff'; ctx.beginPath();
     for (let x = 0; x < w; x++){
       const t = (x/w) * 2*Math.PI; // one cycle
       const y = cy - A * fn(t);
-      (x===0) ? ctx.moveTo(cx+x, y) : ctx.lineTo(cx+x, y);
+      (x===0) ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     }
     ctx.stroke();
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
   }
-  const TWO_PI = Math.PI * 2;
   drawRef(el.refs.sine, t => Math.sin(t));
   drawRef(el.refs.square, t => Math.sign(Math.sin(t)) || 1);
   drawRef(el.refs.triangle, t => {
-    // Triangle via saw folded: normalized to [-1,1]
-    let s = (t / Math.PI) % 2; // [0,2)
-    s = s < 1 ? s : 2 - s;     // [0,1] rising then falling
-    return (s * 2 - 1);        // [-1,1]
+    let s = (t / Math.PI) % 2; s = s < 1 ? s : 2 - s; return (s * 2 - 1);
   });
   drawRef(el.refs.saw, t => ((t / Math.PI) % 2) - 1);
 
-  // --- Initial rows for convenience ---
+  // --- Initial rows ---
   addToneRow({ freq: 440, type: 'sine', vol: 0.30 });
   addToneRow({ freq: 660, type: 'sine', vol: 0.18 });
 
