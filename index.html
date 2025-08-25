@@ -226,7 +226,7 @@
     div.className = 'tone';
     div.dataset.id = id;
     div.innerHTML = `
-      <input type="number" class="freq" min="10" max="20000" step="0.1" value="${freq}" aria-label="Frequency (Hz)" />
+      <input type="number" class="freq" min="00" max="20000" step="0.1" value="${freq}" aria-label="Frequency (Hz)" />
       <select class="type" aria-label="Waveform">
         ${['sine','square','triangle','sawtooth'].map(w => `<option value="${w}" ${w===type?'selected':''}>${w}</option>`).join('')}
       </select>
